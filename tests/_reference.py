@@ -4,7 +4,8 @@
   * ref_lll : 按教科书（H. Cohen, A Course in Computational Algebraic Number
     Theory, Alg. 2.6.3 的常见变体）独立编写的精确有理 LLL，用于交叉检验；
   * enumerate_shortest_2d : 二维格短向量穷举，独立求最短长度 lambda1；
-  * frac_gs : 另一份独立 Gram-Schmidt。
+  * frac_gs : 另一份独立 Gram-Schmidt；
+  * ref_closest_vector : 盒内最近格向量的独立递归穷举参考。
 这些参考只用于生成/核对期望值，不调用 lll_reduce 包的任何代码。
 """
 
@@ -82,3 +83,33 @@ def enumerate_shortest_2d(A, bound=1024):
             elif d == best:
                 best_vecs.append((v0, v1))
     return best, sorted(set(best_vecs))
+
+
+def ref_closest_vector(A, target, box):
+    """独立参考：盒内最近格向量（递归穷举，与被测实现结构刻意不同）。
+
+    被测实现用 itertools.product 顺序扫描、严格小于更新；本参考改为
+    递归枚举并显式按 (平方距离, 系数元组) 取最小键，二者独立。
+    返回 (coefficients, vector, distance2)。
+    """
+    rows = [list(map(int, row)) for row in A]
+    t = [Fraction(x) for x in target]
+    n, m = len(rows), len(rows[0])
+    best = {"key": None, "c": None, "v": None}
+
+    def rec(i, acc):
+        if i == n:
+            v = [sum(acc[k] * rows[k][j] for k in range(n)) for j in range(m)]
+            d = sum((Fraction(v[j]) - t[j]) ** 2 for j in range(m))
+            key = (d, tuple(acc))
+            if best["key"] is None or key < best["key"]:
+                best["key"] = key
+                best["c"] = list(acc)
+                best["v"] = v
+            return
+        lo, hi = box[i]
+        for c in range(lo, hi + 1):
+            rec(i + 1, acc + [c])
+
+    rec(0, [])
+    return best["c"], best["v"], best["key"][0]

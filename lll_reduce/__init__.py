@@ -5,6 +5,8 @@
     LLLResult, LogEntry       : 结果与日志数据结构
     verify_reduction          : 独立验证器
     VerificationReport        : 验证报告
+    closest_vector            : 盒内最近格向量（CVP，n <= 3，调用者给系数盒）
+    CVPResult, CVP_MAX_DIM    : 最近向量结果与维数上限
     round_half_even           : 并列向偶数的最近整数舍入
     DELTA, MAX_DIM, DEFAULT_BUDGET
 """
@@ -26,6 +28,7 @@ from .core import (
     reduce_basis,
     round_half_even,
 )
+from .cvp import CVP_MAX_DIM, CVPResult, closest_vector
 from .verifier import VerificationReport, verify_reduction
 
 __all__ = [
@@ -35,6 +38,9 @@ __all__ = [
     "LogEntry",
     "verify_reduction",
     "VerificationReport",
+    "closest_vector",
+    "CVPResult",
+    "CVP_MAX_DIM",
     "round_half_even",
     "DELTA",
     "MAX_DIM",

@@ -1,8 +1,13 @@
-# lll_reduce — 有理 Gram–Schmidt 的 LLL 格基约化
+# lll_reduce — 有理 Gram–Schmidt 的 LLL 格基约化与盒内最近格向量
 
-可复用的离线数论计算模块：对满行秩整数行基执行 **LLL 约化（δ = 3/4）**，
-Gram–Schmidt 系数全部用 `fractions.Fraction` **精确**计算（无浮点、无容差），
-返回约化基、整数幺模变换矩阵与逐步变换日志，并附带**独立验证器**核验证书。
+可复用的离线数论计算模块，包含两项能力：
+
+1. **LLL 约化（δ = 3/4）**：对满行秩整数行基执行约化，Gram–Schmidt 系数
+   全部用 `fractions.Fraction` **精确**计算（无浮点、无容差），返回约化基、
+   整数幺模变换矩阵与逐步变换日志，并附带**独立验证器**核验证书。
+2. **盒内最近格向量（CVP，维数 ≤ 3）**：对有理目标点，在调用者给定的
+   有限整数系数盒内穷举，返回**原基整数系数**、最近格向量与**精确平方
+   距离**；并列按原基系数字典序取最小。**只保证盒内最优。**
 
 ## 环境与依赖
 
@@ -14,7 +19,7 @@ Gram–Schmidt 系数全部用 `fractions.Fraction` **精确**计算（无浮点
 ## 运行命令
 
 ```bash
-# 必要测试（38 个），在仓库根目录执行：
+# 必要测试（57 个），在仓库根目录执行：
 python -m unittest discover -s tests -v
 
 # 固定输入演示（约 1 秒，真实计算，无 sleep、无预录结果）：
@@ -25,11 +30,12 @@ python demo.py
 
 ```python
 from lll_reduce import (
-    reduce_basis,        # 主算法；lll_reduce 为同义别名
+    reduce_basis,        # LLL 主算法；lll_reduce 为同义别名
     verify_reduction,    # 独立验证器
+    closest_vector,      # 盒内最近格向量（CVP，n <= 3）
     round_half_even,     # 最近整数、并列向偶数（banker's rounding）
-    LLLResult, LogEntry, VerificationReport,
-    DELTA, MAX_DIM, DEFAULT_BUDGET,
+    LLLResult, LogEntry, VerificationReport, CVPResult,
+    DELTA, MAX_DIM, DEFAULT_BUDGET, CVP_MAX_DIM,
     LLLError, InvalidParameterError, InvalidBasisError,
     RankDeficientError, BudgetExhaustedError,
 )
@@ -75,14 +81,44 @@ from lll_reduce import (
 `report.ok` 为布尔，`report.failures` 给出可定位的失败原因列表。
 比较全部是 `Fraction` **精确**比较，没有任何 epsilon/容差。
 
+### `closest_vector(A, target, box) -> CVPResult`
+
+在**调用者给定的有限系数盒**内找离有理目标最近的格向量（纯穷举，精确）。
+
+- `A`：n×m 整数矩阵，**行向量为基**；`1 <= n <= 3`（`CVP_MAX_DIM = 3`，
+  与 LLL 的 8 维上限不同），`m >= n`，满行秩。元素必须是精确 `int`。
+- `target`：长度 m 的目标点，元素为 `int` 或 `Fraction`（有理目标）；
+  `float`（含 NaN/±inf）与 `bool` 一律拒绝。
+- `box`：n 个 `(lo, hi)` 整数对，`lo <= hi`，给出每个**原基系数**的
+  闭区间搜索范围。盒的大小即搜索量，由调用者负责。
+
+返回 `CVPResult`（frozen dataclass）：
+
+| 字段 | 含义 |
+|---|---|
+| `coefficients: list[int]` | 原基整数系数 c，最近格向量 v = c·A |
+| `vector: list[int]` | 最近格向量 v（对**原基** A，非约化基） |
+| `distance2: Fraction` | 精确平方距离 ‖v − t‖²，无浮点 |
+| `box` | 实际使用的系数盒（回显） |
+| `nodes_visited: int` | 穷举的系数向量数，等于盒体积，确定可复算 |
+
+语义约定：
+
+- **只保证盒内最优**：盒外可能存在更近的格向量；本模块不做无限域
+  截断证明，不声称给出全格最近向量。
+- **并列规则**：多个系数向量达到同一最小距离时，返回**原基系数
+  字典序最小**者（按 `(c_0, …, c_{n-1})` 元组序）。
+- 成本与盒体积 `∏(hi_i − lo_i + 1)` 成正比（n ≤ 3 的纯穷举）；
+  没有独立的搜索预算参数，盒即预算。
+
 ## 错误语义（非法输入不静默纠正）
 
 | 异常 | 触发条件 |
 |---|---|
-| `InvalidBasisError` | 非矩阵、空行、行不等长、元素非 `int`、列数 < 行数、行数 > 8；`.location` 给出如 `A[1][2]` 的定位 |
-| `InvalidParameterError` | `budget` 非正整数等；`.parameter/.reason` 可定位 |
+| `InvalidBasisError` | 非矩阵、空行、行不等长、元素非 `int`、列数 < 行数；LLL 行数 > 8，CVP 行数 > 3；`.location` 给出如 `A[1][2]` 的定位 |
+| `InvalidParameterError` | `budget` 非正整数；CVP 的 `target` 长度/元素非法、`box` 对数不符、空区间（lo > hi）、非整数界等；`.parameter/.reason` 可定位（如 `target[1]`、`box[0]`） |
 | `RankDeficientError` | **数学上证明**行线性相关；`.expected/.rank` 给出期望秩与检测到的实际行秩 |
-| `BudgetExhaustedError` | 预算耗尽（资源不足，**不是**无解）；`.partial` 为 `reduced=False` 的中间态快照 |
+| `BudgetExhaustedError` | LLL 预算耗尽（资源不足，**不是**无解）；`.partial` 为 `reduced=False` 的中间态快照 |
 
 - **NaN/Infinity 拒绝**：矩阵元素只接受 `int`；任何 `float`（包括
   `float('nan')`、`±inf`）一律抛 `InvalidBasisError`，不做静默数值转换。
@@ -116,13 +152,23 @@ from lll_reduce import (
 4. **行基、整数域**：严格按本题契约，不支持列基约定、实数/浮点输入或
    δ 参数化；不宣称兼容 fplll/FPLLL 等行业实现的全部选项与输出排序。
 5. **测试期望值独立性**：测试目录内的 `tests/_reference.py` 是独立编写的
-   教科书 LLL（刻意采用不同的并列舍入规则）与二维短向量穷举，不调用被测
-   核心；另有手算定值、日志重放与独立验证器。对约化基再次约化的
+   教科书 LLL（刻意采用不同的并列舍入规则）、二维短向量穷举与**结构不同
+   的递归 CVP 穷举**，不调用被测核心；另有手算定值、解析关系（目标平移
+   一个格向量则系数同步平移）、日志重放与独立验证器。对约化基再次约化的
    “往返一致”只作补充断言。
+6. **CVP 用纯穷举而非 LLL 约化后枚举**：n ≤ 3 且盒由调用者给定，直接
+   对原基系数盒全量扫描最直观，并列字典序由枚举顺序自然保证；不引入
+   剪枝/截断半径等需要额外正确性论证的优化。
 
 ## 已知限制（如实声明）
 
-- 维数上限 n = 8；超过即 `InvalidBasisError`，不自动放宽。
+- LLL 维数上限 n = 8；CVP 维数上限 n = 3（`CVP_MAX_DIM`），超过即
+  `InvalidBasisError`，不自动放宽。
+- **CVP 只保证盒内最优**：结果质量完全取决于调用者给的系数盒；盒外
+  可能有更近格向量，本库不提供无限域截断半径证明，也不提供最近 k 点、
+  暂停/恢复接口。
+- CVP 成本 = 盒体积 × O(n·m)，盒开大了就是慢；这是调用者的显式选择，
+  库不另设搜索预算上限。
 - LLL 给的是 δ-约化基，**不保证给出格的最短向量**；二维有
   `‖b₀‖² ≤ 2·λ₁²` 的界，测试与 demo 用独立穷举对照但不要求首向量最短。
 - 输出向量的具体次序/符号与并列舍入策略有关；本库保证的是约化条件与
@@ -139,11 +185,13 @@ from lll_reduce import (
 lll_reduce/
     __init__.py    # 公开接口导出
     core.py        # LLL 主算法、舍入、预算、输入校验
+    cvp.py         # 盒内最近格向量（n <= 3，纯穷举，精确距离）
     verifier.py    # 独立验证器（自带 GS + Bareiss 行列式）
     errors.py      # 错误类型
 tests/
-    test_lll.py    # 必要测试（unittest）
-    _reference.py  # 独立教科书 LLL + 二维短向量穷举（测试专用）
+    test_lll.py    # LLL 必要测试（unittest）
+    test_cvp.py    # 盒内最近格向量必要测试（unittest）
+    _reference.py  # 独立教科书 LLL + 二维短向量穷举 + 递归 CVP 穷举（测试专用）
 demo.py            # 固定输入演示
 README.md
 ```
