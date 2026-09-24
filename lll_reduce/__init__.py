@@ -6,7 +6,9 @@
     verify_reduction          : 独立验证器
     VerificationReport        : 验证报告
     round_half_even           : 并列向偶数的最近整数舍入
-    DELTA, MAX_DIM, DEFAULT_BUDGET
+    nearest_vector            : 盒约束最近格向量（CVP，n <= 3，精确枚举）
+    NearestVectorResult       : CVP 结果数据结构
+    DELTA, MAX_DIM, DEFAULT_BUDGET, CVP_MAX_DIM
 """
 
 from .errors import (
@@ -27,6 +29,7 @@ from .core import (
     round_half_even,
 )
 from .verifier import VerificationReport, verify_reduction
+from .cvp import CVP_MAX_DIM, NearestVectorResult, nearest_vector
 
 __all__ = [
     "reduce_basis",
@@ -36,6 +39,9 @@ __all__ = [
     "verify_reduction",
     "VerificationReport",
     "round_half_even",
+    "nearest_vector",
+    "NearestVectorResult",
+    "CVP_MAX_DIM",
     "DELTA",
     "MAX_DIM",
     "DEFAULT_BUDGET",

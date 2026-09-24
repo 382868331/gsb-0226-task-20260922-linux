@@ -82,3 +82,32 @@ def enumerate_shortest_2d(A, bound=1024):
             elif d == best:
                 best_vecs.append((v0, v1))
     return best, sorted(set(best_vecs))
+
+
+def enumerate_box_cvp(A, target, bounds):
+    """独立穷举「原基系数盒内最近格向量」，用于核对 lll_reduce.nearest_vector。
+
+    A : n×m 整数行基；target : 长度 m 的 Fraction 序列；
+    bounds : [(lo_i, hi_i)]。直接遍历盒内全部整数系数（不调用被测包的
+    任何代码、不做 LLL、不做剪枝），返回 (按原系数字典序的并列系数列表,
+    精确平方距离, 对应格点列表)。
+    """
+    from itertools import product
+
+    n, m = len(A), len(A[0])
+    best = None
+    winners = []
+    for c in product(*[range(lo, hi + 1) for lo, hi in bounds]):
+        v = [sum(c[i] * A[i][k] for i in range(n)) for k in range(m)]
+        d = sum((target[k] - v[k]) ** 2 for k in range(m))
+        if best is None or d < best:
+            best = d
+            winners = [c]
+        elif d == best:
+            winners.append(c)
+    winners.sort()
+    vecs = [
+        [sum(c[i] * A[i][k] for i in range(n)) for k in range(m)]
+        for c in winners
+    ]
+    return winners, best, vecs
