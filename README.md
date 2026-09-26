@@ -1,8 +1,14 @@
-# lll_reduce — 有理 Gram–Schmidt 的 LLL 格基约化
+# lll_reduce — 有理 Gram–Schmidt 的 LLL 格基约化与整数格交
 
 可复用的离线数论计算模块：对满行秩整数行基执行 **LLL 约化（δ = 3/4）**，
 Gram–Schmidt 系数全部用 `fractions.Fraction` **精确**计算（无浮点、无容差），
 返回约化基、整数幺模变换矩阵与逐步变换日志，并附带**独立验证器**核验证书。
+
+增量能力：intersection_basis 计算两个同维满秩整数**列格**（维数 ≤ 4）的
+**交格**——先通过精确整数方程（列 Hermite 标准形求整数核
+ker_Z [B1 | -B2]）求出共同向量，再用上述 LLL 缩短输出；**不使用浮点
+子空间交**。同时返回双边整数坐标矩阵 U、V（B1@U == B2@V == 输出基）、
+交格在两边格中的指数，以及行列式/Smith 标准形完备性证据。
 
 ## 环境与依赖
 
@@ -11,14 +17,25 @@ Gram–Schmidt 系数全部用 `fractions.Fraction` **精确**计算（无浮点
   环境变量或任何外部服务。
 - Linux 原生运行。
 
+### 隔离 venv 准备（可选但推荐）
+
+```bash
+python3.14 -m venv .venv        # 仓库内已备好 .venv 符号链接，可直接复用
+source .venv/bin/activate       # 或直接使用 .venv/bin/python
+# 无需 pip install：仅标准库，requirements.txt 仅为注释
+```
+
 ## 运行命令
 
 ```bash
-# 必要测试（38 个），在仓库根目录执行：
+# 必要测试（50 个，含基线回归与交格新增），在仓库根目录执行：
 python -m unittest discover -s tests -v
 
 # 固定输入演示（约 1 秒，真实计算，无 sleep、无预录结果）：
 python demo.py
+
+# 交格演示（上限 90 秒，实测约 0.1 秒，真实离线计算）：
+python demo_iteration.py
 ```
 
 ## 公开接口
@@ -32,6 +49,9 @@ from lll_reduce import (
     DELTA, MAX_DIM, DEFAULT_BUDGET,
     LLLError, InvalidParameterError, InvalidBasisError,
     RankDeficientError, BudgetExhaustedError,
+    # 交格增量：
+    intersection_basis, verify_intersection,
+    IntersectionResult, MAX_INTERSECTION_DIM,
 )
 ```
 
@@ -74,6 +94,32 @@ from lll_reduce import (
 
 `report.ok` 为布尔，`report.failures` 给出可定位的失败原因列表。
 比较全部是 `Fraction` **精确**比较，没有任何 epsilon/容差。
+
+### `intersection_basis(B1, B2, budget=1_000_000) -> IntersectionResult`
+
+- `B1`、`B2`：同维 n×n 整数方阵（嵌套序列），**列向量为格基**，
+  `1 <= n <= 4`，均须满秩（det ≠ 0）；奇异输入抛 `RankDeficientError`。
+- 算法：列 Hermite 标准形求 `[B1 | -B2]` 的整数核（Z-基），x 分量经
+  B1 映回得到交格基，再转置交给 `reduce_basis` 做 LLL 缩短后转回列基。
+  全程精确整数/有理数运算，不把浮点子空间交当成整数格交。
+
+返回 `IntersectionResult`（只读 dataclass）：
+
+| 字段 | 含义 |
+|---|---|
+| `basis` | n×n 整数矩阵 G，**列**为交格 L(B1)∩L(B2) 的 LLL 约化基 |
+| `left_coords / right_coords` | 整数矩阵 U、V，`B1@U == B2@V == G` |
+| `index_in_left / index_in_right` | 指数 [L1:L∩]、[L2:L∩]，等于 \|det U\|、\|det V\| |
+| `snf_left / snf_right` | U、V 的 Smith 标准形对角元（乘积 = 对应指数） |
+| `sum_det` | 和格 L(B1)+L(B2) 的协体积（[B1\|B2] 列 HNF 行列式） |
+| `lll_log` | 末段 LLL 缩短的逐步变换日志 |
+
+完备性证据（不止包含关系）：第二同构定理 [L1:L1∩L2] = [L1+L2:L2]
+给出恒等式 `index_in_left * sum_det == |det B2|`（另一侧同理），
+由 `verify_intersection(B1, B2, G, U, V)` 用独立实现的行列式与列 HNF
+逐项复核；任一不满足即 `ok=False` 并给出可定位失败原因。
+
+负行列式与基列换序（含变号）描述同一个格，交格结果等价（测试覆盖）。
 
 ## 错误语义（非法输入不静默纠正）
 
@@ -123,6 +169,8 @@ from lll_reduce import (
 ## 已知限制（如实声明）
 
 - 维数上限 n = 8；超过即 `InvalidBasisError`，不自动放宽。
+- 交格维数上限 n = 4，且仅接受满秩方阵（列基约定）；超过或奇异即拒绝，
+  不自动放宽、不静默纠正。
 - LLL 给的是 δ-约化基，**不保证给出格的最短向量**；二维有
   `‖b₀‖² ≤ 2·λ₁²` 的界，测试与 demo 用独立穷举对照但不要求首向量最短。
 - 输出向量的具体次序/符号与并列舍入策略有关；本库保证的是约化条件与
@@ -140,10 +188,13 @@ lll_reduce/
     __init__.py    # 公开接口导出
     core.py        # LLL 主算法、舍入、预算、输入校验
     verifier.py    # 独立验证器（自带 GS + Bareiss 行列式）
+    intersection.py # 交格：整数核 + LLL 缩短 + 指数/SNF 证书
     errors.py      # 错误类型
 tests/
     test_lll.py    # 必要测试（unittest）
+    test_intersection.py # 交格测试（定值、盒枚举、证书、错误语义）
     _reference.py  # 独立教科书 LLL + 二维短向量穷举（测试专用）
 demo.py            # 固定输入演示
+demo_iteration.py   # 交格固定输入演示
 README.md
 ```

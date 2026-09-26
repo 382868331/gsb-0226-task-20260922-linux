@@ -180,3 +180,128 @@ def verify_reduction(
             )
 
     return VerificationReport(not failures, failures)
+
+
+def _sum_lattice_det(B1, B2):
+    """和格 L(B1)+L(B2) 的协体积：[B1|B2] 的列 Hermite 标准形行列式。
+
+    验证器独立实现（不调用 intersection 模块），用于完备性恒等式。
+    """
+    n = len(B1)
+    H = [list(map(int, B1[i])) + list(map(int, B2[i])) for i in range(n)]
+    m = 2 * n
+    det = 1
+    for i in range(n):
+        # 在列 i..m-1 中对第 i 行整数辗转相除，使只剩 H[i][i] 非零。
+        while True:
+            piv = -1
+            for j in range(i, m):
+                if H[i][j] != 0 and (piv < 0 or abs(H[i][j]) < abs(H[i][piv])):
+                    piv = j
+            if piv < 0:
+                return 0
+            if piv != i:
+                for r in range(n):
+                    H[r][i], H[r][piv] = H[r][piv], H[r][i]
+            for j in range(i + 1, m):
+                if H[i][j] != 0:
+                    q = H[i][j] // H[i][i]
+                    for r in range(n):
+                        H[r][j] -= q * H[r][i]
+            if all(H[i][j] == 0 for j in range(i + 1, m)):
+                break
+        det *= H[i][i]
+    return abs(det)
+
+
+def verify_intersection(B1, B2, G, U, V):
+    """独立验证交格证书：成员关系 + 行列式/整数标准形完备性证据。
+
+    逐项检查（全部精确整数运算，无浮点、无容差）：
+      1. 五个矩阵均为同维 n x n 整数矩阵（1 <= n <= 4）；
+      2. 成员关系：B1 @ U == G 且 B2 @ V == G（G 的列同时在两格中）；
+      3. 非奇异：det G、det U、det V 均非零；
+      4. 指数一致：|det G| == |det B1| * |det U| == |det B2| * |det V|；
+      5. 完备性（无遗漏共同格点）：记 s 为和格 L(B1)+L(B2) 的协体积
+         （由 [B1|B2] 的列 Hermite 标准形独立计算），第二同构定理要求
+         [L1 : L1∩L2] = [L1+L2 : L2]，即
+             |det U| * s == |det B2| 且 |det V| * s == |det B1|。
+    """
+    failures = []
+
+    mats = {}
+    for name, M in (("B1", B1), ("B2", B2), ("G", G), ("U", U), ("V", V)):
+        if not _is_int_matrix(M):
+            failures.append(name + " is not a non-empty integer matrix")
+        else:
+            mats[name] = [list(r) for r in M]
+    if failures:
+        return VerificationReport(False, failures)
+
+    n = len(mats["B1"])
+    if n > 4:
+        failures.append("dimension %d exceeds maximum 4" % n)
+    for name, M in mats.items():
+        if len(M) != n or any(len(r) != n for r in M):
+            failures.append("%s is not %dx%d" % (name, n, n))
+    if failures:
+        return VerificationReport(False, failures)
+
+    B1m, B2m = mats["B1"], mats["B2"]
+    Gm, Um, Vm = mats["G"], mats["U"], mats["V"]
+
+    # 2) 成员关系
+    for name, P in (("B1@U", _mat_mul_int(B1m, Um)), ("B2@V", _mat_mul_int(B2m, Vm))):
+        if P != Gm:
+            for i in range(n):
+                for j in range(n):
+                    if P[i][j] != Gm[i][j]:
+                        failures.append(
+                            "%s != G at [%d][%d]: %d != %d"
+                            % (name, i, j, P[i][j], Gm[i][j])
+                        )
+                        break
+                else:
+                    continue
+                break
+
+    # 3) 非奇异
+    det_g, det_u, det_v = _det_int(Gm), _det_int(Um), _det_int(Vm)
+    det_b1, det_b2 = _det_int(B1m), _det_int(B2m)
+    for name, d in (("G", det_g), ("U", det_u), ("V", det_v)):
+        if d == 0:
+            failures.append("det(%s) == 0: singular" % name)
+    if det_b1 == 0 or det_b2 == 0:
+        failures.append("B1 or B2 is singular")
+    if failures:
+        return VerificationReport(False, failures)
+
+    # 4) 指数一致性
+    if abs(det_g) != abs(det_b1) * abs(det_u):
+        failures.append(
+            "|det G| = %d != |det B1|*|det U| = %d"
+            % (abs(det_g), abs(det_b1) * abs(det_u))
+        )
+    if abs(det_g) != abs(det_b2) * abs(det_v):
+        failures.append(
+            "|det G| = %d != |det B2|*|det V| = %d"
+            % (abs(det_g), abs(det_b2) * abs(det_v))
+        )
+
+    # 5) 完备性：[Li : L1∩L2] = [L1+L2 : Lj]（第二同构定理，HNF 证据）
+    s = _sum_lattice_det(B1m, B2m)
+    if s == 0:
+        failures.append("sum lattice L(B1)+L(B2) is degenerate")
+    else:
+        if abs(det_u) * s != abs(det_b2):
+            failures.append(
+                "completeness failed: [L1:L∩]*det(L1+L2) = %d != |det B2| = %d"
+                % (abs(det_u) * s, abs(det_b2))
+            )
+        if abs(det_v) * s != abs(det_b1):
+            failures.append(
+                "completeness failed: [L2:L∩]*det(L1+L2) = %d != |det B1| = %d"
+                % (abs(det_v) * s, abs(det_b1))
+            )
+
+    return VerificationReport(not failures, failures)

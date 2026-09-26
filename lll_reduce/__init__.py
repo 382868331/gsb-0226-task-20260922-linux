@@ -27,6 +27,12 @@ from .core import (
     round_half_even,
 )
 from .verifier import VerificationReport, verify_reduction
+from .intersection import (
+    MAX_INTERSECTION_DIM,
+    IntersectionResult,
+    intersection_basis,
+)
+from .verifier import verify_intersection
 
 __all__ = [
     "reduce_basis",
@@ -44,4 +50,8 @@ __all__ = [
     "InvalidParameterError",
     "RankDeficientError",
     "BudgetExhaustedError",
+    "intersection_basis",
+    "verify_intersection",
+    "IntersectionResult",
+    "MAX_INTERSECTION_DIM",
 ]
