@@ -14,11 +14,18 @@ Gram–Schmidt 系数全部用 `fractions.Fraction` **精确**计算（无浮点
 ## 运行命令
 
 ```bash
-# 必要测试（38 个），在仓库根目录执行：
+# 可选：隔离 venv（仅标准库依赖；不联网、不装第三方包）
+python3.14 -m venv .venv
+source .venv/bin/activate
+
+# 必要测试（49 个 = 基线 38 + 交格 11），在仓库根目录执行：
 python -m unittest discover -s tests -v
 
 # 固定输入演示（约 1 秒，真实计算，无 sleep、无预录结果）：
 python demo.py
+
+# 交格增量演示（秒级，真实计算，无 sleep、无预录结果）：
+python demo_iteration.py
 ```
 
 ## 公开接口
@@ -27,6 +34,10 @@ python demo.py
 from lll_reduce import (
     reduce_basis,        # 主算法；lll_reduce 为同义别名
     verify_reduction,    # 独立验证器
+    intersection_basis,  # 整数列格交格（精确整数核 + LLL 缩短）
+    verify_intersection, # 交格独立验证器（含无漏点的本原性证据）
+    IntersectionResult,  # 交格结果（C、U、V、两边指数、det、核基）
+    MAX_INTERSECTION_DIM,# 交格维数上限（=4）
     round_half_even,     # 最近整数、并列向偶数（banker's rounding）
     LLLResult, LogEntry, VerificationReport,
     DELTA, MAX_DIM, DEFAULT_BUDGET,
@@ -105,10 +116,56 @@ from lll_reduce import (
 
 ## 设计取舍
 
+## 整数列格交格：`intersection_basis`
+
+在保留上述行基 LLL 全部能力的前提下，新增**列格交格**接口：
+
+```python
+from lll_reduce import intersection_basis, verify_intersection
+
+res = intersection_basis(B1, B2)   # B1、B2 为同维满秩整数方阵，列向量为基
+res.basis                          # 交格 L(B1) ∩ L(B2) 的 LLL 缩短列基 C
+res.U, res.V                       # 整数坐标：B1·U = B2·V = C
+res.index_in_lattice1              # [L(B1) : L(C)] = |det C|/|det B1|
+res.index_in_lattice2              # [L(B2) : L(C)] = |det C|/|det B2|
+res.determinant                    # det C（可为负；列格对列符号不敏感）
+res.kernel_basis                   # [B1|-B2] 的整数核基，即纵向 [U; V]
+```
+
+- **输入契约**：`1 <= n <= 4` 的同维整数方阵，满秩（det ≠ 0）；负行列式、
+  基列任意换序都给出同一个格。奇异输入抛 `RankDeficientError`，形状/类型/
+  维数非法抛 `InvalidBasisError`（`float`、`bool` 同样拒绝）。
+- **精确整数算法（非浮点子空间交）**：共同点 `B1 u = B2 v` 等价于
+  `M [u; v] = 0`、`M = [B1 | -B2]`。模块对 M 做**列 Hermite 消元**
+  （扩展欧几里得 + 整数幺正 2×2 列变换），把 M 化成 `[H | 0]` 并同步作用
+  于单位阵，末尾列直接给出**整数核基**；再取核的前 n 行 U、后 n 行 V，
+  `C = B2 V` 即为交格的一个精确整数基。全过程只用整数，不存在浮点
+  子空间交把 `(1, 1/2)` 误当整数坐标的问题。
+- **LLL 缩短**：对 `C` 的转置复用现有行基 `reduce_basis`（δ=3/4，精确
+  Fraction GS），幺正行变换 W 同步右乘到 U、V，输出缩短列基而不改变格。
+- **“没有漏掉共同点”的证据**（仅验证包含关系不够）：
+  `verify_intersection` 独立检查
+  1. `B1 U = B2 V = C`（精确整数乘法，包含关系）；
+  2. `[B1|-B2]·[U;V] = 0`；
+  3. 核矩阵 `[U;V]` 的**全部 n 阶子式 gcd = 1**（Smith 标准形本原性
+     不变量）：核在 Z^{2n} 中饱和，任何共同点的整数坐标都整系数属于它，
+     因而 L(C) 恰为交格而非其有限指数子格；
+  4. 指数由 Bareiss 行列式核算：`|det C|/|det Bi|` 为整数且与报告一致；
+  5. C 转置后独立通过 size-reduction 与 Lovász 检查。
+  测试还会在小坐标盒内**枚举共同点**（独立用 B⁻¹ 的有理坐标判定）与
+  交格点逐一对照，覆盖相等格、互素对角格、斜基、负行列式/列换序等情形。
+
+### 适用范围
+
+- 仅适用于同维（n ≤ 4）满秩整数**方阵**列格；不处理不同维数、秩亏格、
+  实数/浮点输入，也不做一般多格交或非整数格。
+- LLL 只缩短输出基，不保证最短向量；交格本身的指数/协体积是数学不变量。
+ ## 设计取舍
+
 1. **全程精确有理数**：μ、`|b*|²`、Lovász 比较都是 `Fraction`，因此
    **不存在浮点舍入误差，也不设容差**；10⁸⁰ 量级输入仍精确。代价是大整数
    运算速度慢于浮点实现，但 n ≤ 8 的契约下完全可接受（测试套件含 10⁸⁰
-   用例，整套 38 测约 3–6 秒）。
+   用例，基线整套 38 测约 3–6 秒；连同交格 11 测共 49 测约 5–7 秒）。
 2. **交换后全量重算 GS**（n ≤ 8），而非手工维护 μ/D 的增量公式：
    换取实现直观、杜绝增量更新的下标/符号错误；正确性由独立验证器兜底。
 3. **并列舍入向偶数**：`round_half_even` 用纯整数比较实现（比较 `2r` 与
@@ -140,10 +197,13 @@ lll_reduce/
     __init__.py    # 公开接口导出
     core.py        # LLL 主算法、舍入、预算、输入校验
     verifier.py    # 独立验证器（自带 GS + Bareiss 行列式）
+    intersection.py # 列 Hermite 整数核 + 列格交格 + LLL 缩短
     errors.py      # 错误类型
 tests/
     test_lll.py    # 必要测试（unittest）
+    test_intersection.py # 交格测试（盒枚举共同点 + 本原性证书）
     _reference.py  # 独立教科书 LLL + 二维短向量穷举（测试专用）
 demo.py            # 固定输入演示
+demo_iteration.py  # 交格固定输入演示
 README.md
 ```

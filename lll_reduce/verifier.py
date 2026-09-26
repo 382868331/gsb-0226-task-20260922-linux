@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Sequence
+import math
 
 DELTA: Fraction = Fraction(3, 4)
 
@@ -179,4 +180,129 @@ def verify_reduction(
                 f"{float(lhs):.6g} < {float(rhs):.6g} (exact rational comparison)"
             )
 
+    return VerificationReport(not failures, failures)
+
+def _reduced_only(B):
+    """独立检查行基 B 是否满足 size reduction + Lovasz（不检查来源）。"""
+    failures = []
+    _, mu, norm2 = _independent_gs(B)
+    n = len(B)
+    for i in range(n):
+        if norm2[i] == 0:
+            failures.append(f"basis is rank deficient: b*_{i} = 0")
+    for i in range(n):
+        for j in range(i):
+            if abs(mu[i][j]) > Fraction(1, 2):
+                failures.append(
+                    f"size reduction violated: |mu[{i}][{j}]| = {mu[i][j]} > 1/2"
+                )
+    for i in range(1, n):
+        lhs = norm2[i] + mu[i][i - 1] ** 2 * norm2[i - 1]
+        if lhs < DELTA * norm2[i - 1]:
+            failures.append(f"Lovasz condition violated at i={i}")
+    return failures
+
+
+def _n_by_n_minors_gcd(K, n):
+    """K 为 2n×n 整数矩阵：所有 n 阶子式的 gcd（本原性证书）。"""
+    import itertools
+
+    rows = 2 * n
+    g = 0
+    for combo in itertools.combinations(range(rows), n):
+        minor = [K[i] for i in combo]
+        g = math.gcd(g, abs(_det_int(minor)))
+    return g
+
+
+def verify_intersection(B1, B2, result):
+    """独立验证交格证书 result 确实是 L(B1) ∩ L(B2)，且没有漏掉共同点。
+
+    result 需提供 basis/U/V/index_in_lattice1/index_in_lattice2/kernel_basis
+    （即 lll_reduce.IntersectionResult，亦可鸭子类型）。
+
+    证据链（全部精确整数）：
+      1. 形状与整数性；B1、B2、C、U、V 均满秩；
+      2. 包含：B1 U = C、B2 V = C（精确乘法），故 L(C) ⊆ 两边；
+      3. 无漏点（本原性）：K=[U;V] 满足 [B1|-B2] K = 0，且 K 的全部
+         n 阶子式的 gcd = 1（Smith 标准形不变量）。这说明核在 Z^{2n}
+         中是**饱和**（primitive）子格：任何共同点坐标都整系数属于 K，
+         因而 L(C) 恰好等于交格，而不只是它的一个有限指数子格；
+      4. 指数：|det C| / |det Bi| 为整数且与报告的指数一致；
+      5. C 转置后独立通过 LLL size-reduction 与 Lovasz 检查。
+    """
+    failures = []
+    for name, M in (("B1", B1), ("B2", B2)):
+        if not _is_int_matrix(M):
+            failures.append(f"{name} is not a non-empty integer matrix")
+    required = ("basis", "U", "V", "index_in_lattice1",
+                "index_in_lattice2", "kernel_basis")
+    for attr in required:
+        if not hasattr(result, attr):
+            failures.append(f"result missing field {attr}")
+    if failures:
+        return VerificationReport(False, failures)
+
+    B1 = [list(r) for r in B1]
+    B2 = [list(r) for r in B2]
+    C = [list(r) for r in result.basis]
+    U = [list(r) for r in result.U]
+    V = [list(r) for r in result.V]
+    K = [list(r) for r in result.kernel_basis]
+    n = len(B1)
+
+    for name, M, rows in (("B2", B2, n), ("C", C, n), ("U", U, n),
+                          ("V", V, n), ("K", K, 2 * n)):
+        if len(M) != rows or any(len(r) != n for r in M):
+            failures.append(f"{name} has wrong shape: expect {rows}x{n}")
+    if any(len(r) != n for r in B1):
+        failures.append("B1 is not square")
+    if failures:
+        return VerificationReport(False, failures)
+
+    d1, d2, dc = _det_int(B1), _det_int(B2), _det_int(C)
+    du, dv = _det_int(U), _det_int(V)
+    if d1 == 0:
+        failures.append("B1 is singular")
+    if d2 == 0:
+        failures.append("B2 is singular")
+    if dc == 0:
+        failures.append("intersection basis C is singular")
+    if du == 0:
+        failures.append("U is singular (coordinates do not span)")
+    if dv == 0:
+        failures.append("V is singular (coordinates do not span)")
+
+    if _mat_mul_int(B1, U) != C:
+        failures.append("B1*U != C (inclusion in lattice 1 failed)")
+    if _mat_mul_int(B2, V) != C:
+        failures.append("B2*V != C (inclusion in lattice 2 failed)")
+
+    Mbig = [B1[i] + [-B2[i][j] for j in range(n)] for i in range(n)]
+    if _mat_mul_int(Mbig, K) != [[0] * n for _ in range(n)]:
+        failures.append("[B1|-B2]*[U;V] != 0: kernel certificate invalid")
+
+    if K != U + V:
+        failures.append("kernel_basis is not the vertical stack [U; V]")
+
+    if d1 and d2 and dc:
+        g = _n_by_n_minors_gcd(K, n)
+        if g != 1:
+            failures.append(
+                f"kernel not primitive: gcd of n-minors = {g}; a common lattice point may be missing"
+            )
+        i1, r1 = divmod(abs(dc), abs(d1))
+        i2, r2 = divmod(abs(dc), abs(d2))
+        if r1 or r2:
+            failures.append("|det C| is not a multiple of |det Bi|")
+        if result.index_in_lattice1 != i1:
+            failures.append(
+                f"index in lattice 1 mismatch: reported {result.index_in_lattice1} != {i1}"
+            )
+        if result.index_in_lattice2 != i2:
+            failures.append(
+                f"index in lattice 2 mismatch: reported {result.index_in_lattice2} != {i2}"
+            )
+
+    failures.extend(_reduced_only([list(r) for r in zip(*C)]))
     return VerificationReport(not failures, failures)
